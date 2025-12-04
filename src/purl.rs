@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use super::errors::Error;
 use super::errors::Result;
 use super::parser;
-use super::utils::{to_lowercase, PercentCodec};
+use super::utils::{PercentCodec, to_lowercase};
 use super::validation;
 
 const ENCODE_SET: &AsciiSet = &percent_encoding::CONTROLS
@@ -26,8 +26,6 @@ const ENCODE_SET: &AsciiSet = &percent_encoding::CONTROLS
     .add(b'?')
     .add(b'{')
     .add(b'}')
-    // .add(b'/')
-    // .add(b':')
     .add(b';')
     .add(b'=')
     .add(b'+')
@@ -36,7 +34,8 @@ const ENCODE_SET: &AsciiSet = &percent_encoding::CONTROLS
     .add(b'[')
     .add(b']')
     .add(b'^')
-    .add(b'|');
+    .add(b'|')
+    .add(b'/');
 
 /// A Package URL.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,7 +65,7 @@ impl<'a> PackageUrl<'a> {
     /// cannot contain spaces.
     ///
     /// # Name
-    /// The package name will be canonicalize depending on the type: for instance,
+    /// The package name will be canonicalized depending on the type: for instance,
     /// 'bitbucket' packages have a case-insensitive name, so the name will be
     /// lowercased if needed.
     ///
@@ -87,7 +86,7 @@ impl<'a> PackageUrl<'a> {
             t = to_lowercase(t);
             // lowercase name if required by type and needed
             match t.as_ref() {
-                "bitbucket" | "deb" | "github" | "hex" | "npm" => {
+                "bitbucket" | "deb" | "github" | "hex" | "npm" | "composer" | "mlflow" => {
                     n = to_lowercase(n);
                 }
                 "pypi" => {
@@ -152,20 +151,31 @@ impl<'a> PackageUrl<'a> {
     }
 
     /// Assign a namespace to the package.
-    pub fn with_namespace<N>(&mut self, namespace: N) -> &mut Self
+    pub fn with_namespace<N>(&mut self, namespace: N) -> Result<&mut Self>
     where
         N: Into<Cow<'a, str>>,
     {
+        // Fail if namespace is prohibited for this type
+        match self.ty.as_ref() {
+            "bitnami" | "cargo" | "cocoapods" | "conda" | "cran" | "gem" | "hackage" | "mlflow"
+            | "nuget" | "oci" | "pub" | "pypi" => {
+                return Err(Error::TypeProhibitsNamespace(self.ty.to_string()));
+            }
+            _ => {}
+        }
+
+        // Lowercase namespace if needed for this type
         let mut n = namespace.into();
         match self.ty.as_ref() {
-            "bitbucket" | "deb" | "github" | "golang" | "hex" | "rpm" => {
+            "apk" | "bitbucket" | "composer" | "deb" | "github" | "golang" | "hex" | "qpkg"
+            | "rpm" => {
                 n = to_lowercase(n);
             }
             _ => {}
         }
 
         self.namespace = Some(n);
-        self
+        Ok(self)
     }
 
     /// Clear the namespace
@@ -175,12 +185,17 @@ impl<'a> PackageUrl<'a> {
     }
 
     /// Assign a version to the package.
-    pub fn with_version<V>(&mut self, version: V) -> &mut Self
+    pub fn with_version<V>(&mut self, version: V) -> Result<&mut Self>
     where
         V: Into<Cow<'a, str>>,
     {
-        self.version = Some(version.into());
-        self
+        let mut v = version.into();
+        if self.ty.as_ref() == "huggingface" {
+            v = to_lowercase(v);
+        }
+
+        self.version = Some(v);
+        Ok(self)
     }
 
     /// Clear the version
@@ -263,10 +278,10 @@ impl FromStr for PackageUrl<'static> {
 
         let mut purl = Self::new(ty, name)?;
         if let Some(ns) = namespace {
-            purl.with_namespace(ns);
+            purl.with_namespace(ns)?;
         }
         if let Some(v) = version {
-            purl.with_version(v);
+            purl.with_version(v)?;
         }
         if let Some(sp) = subpath {
             purl.with_subpath(sp)?;
@@ -367,7 +382,9 @@ mod tests {
         let purl_string = PackageUrl::new("type", "name")
             .unwrap()
             .with_namespace("name/space")
+            .unwrap()
             .with_version("version")
+            .unwrap()
             .with_subpath("sub/path")
             .unwrap()
             .add_qualifier("k1", "v1")
@@ -380,9 +397,18 @@ mod tests {
 
     #[test]
     fn test_percent_encoding_idempotent() {
-        let orig = "pkg:brew/openssl%25401.1@1.1.1w";
+        let orig = "pkg:brew/open%2Fssl%25401.1@1.1.1w";
         let round_trip = orig.parse::<PackageUrl>().unwrap().to_string();
         assert_eq!(orig, round_trip);
+    }
+
+    #[test]
+    fn test_percent_encoded_name() {
+        let raw_purl = "pkg:type/name/space/first%2Fname";
+        let purl = PackageUrl::from_str(raw_purl).unwrap();
+        assert_eq!(purl.ty(), "type");
+        assert_eq!(purl.namespace(), Some("name/space"));
+        assert_eq!(purl.name(), "first/name");
     }
 
     #[test]
@@ -396,7 +422,10 @@ mod tests {
         )
         .unwrap();
         let encoded = purl.to_string();
-        assert_eq!(encoded, "pkg:deb/ubuntu/gnome-calculator@1:41.1-2ubuntu2?vcs_url=git%2Bhttps://salsa.debian.org/gnome-team/gnome-calculator.git%40debian/1%2541.1-2");
+        assert_eq!(
+            encoded,
+            "pkg:deb/ubuntu/gnome-calculator@1:41.1-2ubuntu2?vcs_url=git%2Bhttps:%2F%2Fsalsa.debian.org%2Fgnome-team%2Fgnome-calculator.git%40debian%2F1%2541.1-2"
+        );
     }
 
     #[cfg(feature = "serde")]
