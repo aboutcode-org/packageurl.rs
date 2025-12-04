@@ -57,11 +57,11 @@ pub fn run_build_test(case: &SpecTestCase) {
 
     let mut purl = purl_result.unwrap();
     if let Some(ref ns) = input.namespace {
-        purl.with_namespace(ns.as_ref());
+        let _ = purl.with_namespace(ns.as_ref());
     }
 
     if let Some(ref v) = input.version {
-        purl.with_version(v.as_ref());
+        let _ = purl.with_version(v.as_ref());
     }
 
     if let Some(ref sp) = input.subpath {

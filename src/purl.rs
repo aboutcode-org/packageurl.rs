@@ -86,7 +86,7 @@ impl<'a> PackageUrl<'a> {
             t = to_lowercase(t);
             // lowercase name if required by type and needed
             match t.as_ref() {
-                "bitbucket" | "deb" | "github" | "hex" | "npm" => {
+                "bitbucket" | "deb" | "github" | "hex" | "npm" | "composer" | "mlflow" => {
                     n = to_lowercase(n);
                 }
                 "pypi" => {
@@ -189,7 +189,12 @@ impl<'a> PackageUrl<'a> {
     where
         V: Into<Cow<'a, str>>,
     {
-        self.version = Some(version.into());
+        let mut v = version.into();
+        if self.ty.as_ref() == "huggingface" {
+            v = to_lowercase(v);
+        }
+
+        self.version = Some(v);
         Ok(self)
     }
 
